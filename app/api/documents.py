@@ -1,7 +1,7 @@
 import uuid
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,12 +13,14 @@ from app.schemas.document import ChunkItem, DocumentResponse, DocumentUploadResp
 from app.services.parser import parser_service
 from app.services.vector_store import process_and_store, vector_store
 from app.services.progress import progress_tracker
+from app.services.reference_service import reference_service
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 async def _process_document(
-    filename: str, content: bytes, doc_id: str, pages: list[str], user_id: int
+    filename: str, content: bytes, doc_id: str, pages: list[str], user_id: int,
+    extract_references: bool = True,
 ):
     async def on_progress(stage, current, total, message, **extra):
         await progress_tracker.update(doc_id, stage, current, total, message, **extra)
@@ -26,8 +28,10 @@ async def _process_document(
     try:
         from app.core.database import async_session
 
-        chunks = await process_and_store(
-            filename, content, doc_id, pages, on_progress=on_progress
+        chunks, all_chapters, all_references, filtered_titles, doc_meta = await process_and_store(
+            filename, content, doc_id, pages,
+            on_progress=on_progress,
+            extract_references=extract_references,
         )
         await progress_tracker.set_done(doc_id, chunks)
 
@@ -36,8 +40,27 @@ async def _process_document(
             doc = result.scalar_one_or_none()
             if doc:
                 doc.chunks_count = chunks
+                doc.page_count = len(pages)
                 doc.status = "ready"
+                if doc_meta:
+                    doc.doc_type = doc_meta.get("doc_type", "otro")
+                    doc.doc_number = doc_meta.get("doc_number")
+                    doc.doc_number_nrm = doc_meta.get("doc_number_nrm")
+                    doc.doc_title = doc_meta.get("doc_title")
+                    doc.doc_date = doc_meta.get("doc_date")
+                    doc.issuing_body = doc_meta.get("issuing_body", "")
                 await db.commit()
+
+        if extract_references and all_references:
+            await progress_tracker.update(doc_id, "referencing", 1, 1, "Verificando referencias a otros documentos...")
+            async with async_session() as db:
+                pending_count = await reference_service.process_references(
+                    db, user_id, doc_id, all_references, all_chapters, filtered_titles
+                )
+                await reference_service.resolve_existing_references(
+                    db, doc_id, doc_meta.get("doc_number_nrm", "")
+                )
+            print(f"  🔗 {pending_count} documentos pendientes registrados")
 
     except Exception as e:
         await progress_tracker.set_error(doc_id, str(e))
@@ -53,6 +76,7 @@ async def _process_document(
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
     file: UploadFile = File(...),
+    extract_references: bool = Form(True),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -70,8 +94,7 @@ async def upload_document(
     doc = Document(
         id=doc_id,
         user_id=current_user.id,
-        filename=doc_id,
-        original_filename=file.filename,
+        filename=file.filename,
         chunks_count=0,
         status="processing",
     )
@@ -80,7 +103,7 @@ async def upload_document(
     await db.refresh(doc)
 
     await progress_tracker.init(doc_id, message=f"Iniciando procesamiento de {file.filename}...")
-    asyncio.create_task(_process_document(file.filename, content, doc_id, pages, current_user.id))
+    asyncio.create_task(_process_document(file.filename, content, doc_id, pages, current_user.id, extract_references))
 
     return doc
 

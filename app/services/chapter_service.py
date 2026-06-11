@@ -1,80 +1,124 @@
 import re
 
 from app.services.ollama import ollama_service
-from app.services.window_service import PageWindow
 
 
-SYSTEM_PROMPT = """Eres un analista de documentos legales. Recibiras varias paginas consecutivas de un reglamento o normativa. Tu tarea es identificar los capitulos, secciones o articulos principales y dividir el texto en bloques tematicos completos.
+REFERENCE_ONLY_PROMPT = """Eres un analista de documentos legales especializado en normativas aduaneras bolivianas. Recibiras el texto de UN SOLO articulo de un reglamento. Tienes DOS tareas:
 
-Responde UNICAMENTE con el siguiente formato delimitado, sin texto adicional ni explicaciones. Cada bloque separado exactamente por "---CHAPTER---":
+1. Identificar el titulo exacto del articulo tal como aparece en el texto.
+2. Identificar todas las referencias a otros documentos legales mencionados.
 
----CHAPTER---
-TITLE: nombre del capitulo o seccion
-CONTENT:
-texto completo del bloque, sin resumir. Puede contener saltos de linea, comillas y cualquier caracter, no importa.
----CHAPTER---
-TITLE: nombre del siguiente bloque
-CONTENT:
-texto completo del siguiente bloque...
+Responde UNICAMENTE con el siguiente formato:
+
+TITLE: ARTICULO 9.- (EJERCICIO DE LAS FUNCIONES DE CONTROL POSTERIOR)
+---REFERENCE---
+TYPE: ley
+NUMBER: 2492
+TITLE: Codigo Tributario Boliviano
+ARTICLE: Articulo 26
+RELATION: referencia
+---REFERENCE---
+TYPE: decreto
+NUMBER: 2731 O
+TITLE: Decreto Supremo
+ARTICLE: Articulos 48, 49
+RELATION: base_legal
+
+Si no hay referencias, responde:
+TITLE: ARTICULO 9.- (EJERCICIO DE LAS FUNCIONES DE CONTROL POSTERIOR)
+NINGUNA
 
 Reglas:
-- Cada bloque debe contener el contenido completo, sin cortes a mitad de oracion
-- Usa los encabezados y numeracion del documento para identificar las divisiones
-- Si un bloque comienza en estas paginas pero su contenido continua mas alla, incluye todo lo disponible
-- Si no encuentras divisiones claras, devuelve un solo bloque con TITLE: Texto
-- El CONTENT debe ser el texto original del documento, no un resumen
-- No inventes contenido, solo estructura el texto proporcionado"""
+- TITLE: copia EXACTAMENTE el encabezado del articulo como aparece en el texto, sin modificarlo
+- TYPE: resolucion, circular, ley, decreto, reglamento, otro
+- NUMBER: numero o codigo del documento (ej: "RD 01-098-24", "323/2024", "2492", "CTB")
+- TITLE de REFERENCE: nombre del documento referenciado
+- ARTICLE: articulos citados separados por coma
+- RELATION: deroga, modifica, referencia, complementa, base_legal"""
 
 
 class ChapterService:
-    async def detect_chapters(self, window: PageWindow) -> list[dict]:
-        text = "\n\n".join(
-            f"--- PAGINA {window.page_start + i + 1} ---\n{p}"
-            for i, p in enumerate(window.pages)
-        )
-        mark_start = window.page_start + 1
-        mark_end = window.page_end + 1
-        user_prompt = f"Analiza el siguiente documento (paginas {mark_start} a {mark_end}):\n\n{text}"
+    async def extract_references(self, article_title: str, article_text: str) -> tuple[str, list[dict]]:
+        user_prompt = f"Articulo: {article_title}\n\n{article_text}"
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": REFERENCE_ONLY_PROMPT},
             {"role": "user", "content": user_prompt},
         ]
 
         raw_response = await ollama_service.chat(messages)
-        chapters = self._parse_delimited(raw_response)
-        if not chapters:
-            raise ValueError(f"El modelo no pudo identificar capitulos en el lote. Respuesta: {raw_response[:300]}...")
-        return chapters
+        cleaned = raw_response.strip()
 
-    def _parse_delimited(self, raw: str) -> list[dict]:
+        extracted_title = self._extract_title_from_response(cleaned) or article_title
+
+        if "NINGUNA" in cleaned.upper():
+            return extracted_title, []
+
+        _, references = self._parse_response(cleaned)
+        return extracted_title, references
+
+    def _extract_title_from_response(self, raw: str) -> str:
+        match = re.search(r"^TITLE:\s*(.+?)(?:\n|$)", raw, re.IGNORECASE | re.MULTILINE)
+        return match.group(1).strip() if match else ""
+
+    def _parse_response(self, raw: str) -> tuple[list[dict], list[dict]]:
         raw = raw.strip()
         raw = raw.replace("```", "").strip()
 
-        blocks = re.split(r"\n?---CHAPTER---\n?", raw)
+        blocks = re.split(r"\n?---(CHAPTER|REFERENCE)---\n?", raw)
 
         chapters = []
-        for block in blocks:
-            block = block.strip()
-            if not block:
-                continue
+        references = []
 
-            title_match = re.search(r"TITLE:\s*(.+?)(?:\n|$)", block, re.DOTALL)
-            content_match = re.search(r"CONTENT:\s*\n?(.*)", block, re.DOTALL)
+        i = 1
+        while i < len(blocks) - 1:
+            block_type = blocks[i]
+            block_content = blocks[i + 1].strip()
+            i += 2
 
-            if not title_match:
-                continue
+            if block_type == "REFERENCE":
+                ref = self._parse_reference_block(block_content)
+                if ref:
+                    references.append(ref)
 
-            title = title_match.group(1).strip()
-            content = content_match.group(1).strip() if content_match else ""
+        return chapters, references
 
-            if not content:
-                content = block[content_match.end():].strip() if content_match else block
+    def _parse_reference_block(self, block: str) -> dict | None:
+        ref_type = self._extract_field(block, "TYPE")
+        ref_number = self._extract_field(block, "NUMBER")
+        ref_title = self._extract_field(block, "TITLE")
+        ref_article = self._extract_field(block, "ARTICLE")
+        relation = self._extract_field(block, "RELATION")
 
-            if content:
-                chapters.append({"title": title, "content": content})
+        if not ref_number or not ref_title:
+            return None
 
-        return chapters
+        ref_number = self._clean_field(ref_number)
+        ref_title = self._clean_field(ref_title)
+
+        if not ref_number or not ref_title:
+            return None
+
+        return {
+            "ref_type": ref_type or "otro",
+            "ref_number": ref_number,
+            "ref_title": ref_title,
+            "ref_article": ref_article or "",
+            "relation": relation or "referencia",
+        }
+
+    def _clean_field(self, value: str) -> str:
+        value = value.strip()
+        value = re.sub(r"^TITLE:\s*", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"^NUMBER:\s*", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"^TYPE:\s*", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"^ARTICLE:\s*", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"^RELATION:\s*", "", value, flags=re.IGNORECASE)
+        return value.strip()
+
+    def _extract_field(self, block: str, field: str) -> str:
+        match = re.search(rf"{field}:\s*(.+?)(?:\n|$)", block, re.DOTALL)
+        return match.group(1).strip() if match else ""
 
 
 chapter_service = ChapterService()

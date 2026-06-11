@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 import numpy as np
 import faiss
@@ -98,6 +99,12 @@ class VectorStore:
         self._save_index()
         self._save_metadata()
 
+    def update_chunk_title(self, doc_id: str, chunk_index: int, new_title: str) -> None:
+        for fid, meta in self.metadata.items():
+            if meta.get("doc_id") == doc_id and meta.get("chunk_index") == chunk_index:
+                meta["chapter_title"] = new_title
+        self._save_metadata()
+
     def get_document_chunks(self, doc_id: str) -> list[dict]:
         items = []
         for fid, meta in self.metadata.items():
@@ -142,18 +149,24 @@ class VectorStore:
         return items
 
 
+TITLE_ONE_WHITELIST = {5, 6, 7}
+TITLE_ONE_MAX = 8
+
+
 async def process_and_store(
     filename: str,
     content: bytes,
     doc_id: str,
     pages: list[str],
     on_progress=None,
-) -> int:
-    from app.services.window_service import window_service, PageWindow
+    extract_references: bool = True,
+) -> tuple[int, list[list[dict]], list[list[dict]], set[str], dict]:
+    from app.services.article_splitter import article_splitter
     from app.services.chapter_service import chapter_service
-    from app.services.merge_service import merge_service
 
+    full_text = "\n".join(pages)
     total_pages = len(pages)
+
     print(f"\n{'='*60}")
     print(f"  📄 PROCESANDO: {filename}")
     print(f"  📑 {total_pages} paginas extraidas")
@@ -166,81 +179,152 @@ async def process_and_store(
 
     await report("parsing", 1, 1, f"PDF parseado: {total_pages} paginas", pages=total_pages)
 
-    windows = window_service.create_windows(pages)
-    total_windows = len(windows)
-    await report("windowing", 1, 1, f"Ventanas creadas: {total_windows} lotes de 5 paginas")
+    raw_texts = article_splitter.split(full_text)
+    total_raw = len(raw_texts)
+    await report("splitting", 1, 1, f"Split por ARTICULO: {total_raw} fragmentos encontrados")
 
-    all_chapters = []
-    for i, window in enumerate(windows):
-        batch_num = i + 1
-        await report(
-            "detecting",
-            batch_num,
-            total_windows,
-            f"Lote {batch_num}/{total_windows} → gemma4:e4b-32k detectando capitulos (pag {window.page_start + 1}-{window.page_end + 1})...",
-            chunks_found=sum(len(c) for c in all_chapters),
-        )
-        try:
-            chapters = await chapter_service.detect_chapters(window)
-            for ch in chapters:
-                ch["page_start"] = window.page_start
-                ch["page_end"] = window.page_end
-            all_chapters.append(chapters)
-            print(f"     ↳ {len(chapters)} capitulos detectados: {', '.join(ch['title'][:40] for ch in chapters)}")
-        except Exception as e:
-            raise Exception(f"Error al procesar lote {batch_num} de {total_windows}: {e}")
+    articles = _filter_title_one_articles(raw_texts)
+    if len(articles) < total_raw:
+        print(f"     🔍 Filtrados {total_raw - len(articles)} articulos de TITULO I")
 
-    total_detected = sum(len(c) for c in all_chapters)
-    await report(
-        "merging",
-        1,
-        1,
-        f"Merge y deduplicacion... {total_detected} capitulos detectados en bruto",
-        chunks_found=total_detected,
-    )
+    filtered_titles: set[str] = set()
+    for a in raw_texts:
+        first_line = a.split("\n")[0].strip() if a else ""
+        num = _extract_article_number(first_line)
+        if num is not None and num not in TITLE_ONE_WHITELIST and _is_title_one_range(num):
+            filtered_titles.add(first_line[:80])
 
-    merged_chapters = merge_service.merge(all_chapters)
-    print(f"     ↳ {len(merged_chapters)} capitulos tras dedup (eliminados {total_detected - len(merged_chapters)})")
+    if not articles:
+        return 0, [], [], filtered_titles, {}
 
-    if not merged_chapters:
-        return 0
+    texts = articles
 
-    texts = [ch["content"] for ch in merged_chapters]
-
-    await report(
-        "embedding",
-        1,
-        1,
-        f"Generando embeddings con bge-m3 para {len(texts)} capitulos...",
-        chunks_found=len(texts),
-    )
+    await report("embedding", 1, 1, f"Generando embeddings con bge-m3 para {len(texts)} articulos...", chunks_found=len(texts))
     embeddings = await ollama_service.embed(texts)
     print(f"     ↳ {len(embeddings)} embeddings generados (dim=1024)")
 
-    chunk_metadata = [
-        {
-            "title": ch.get("title", ""),
-            "page_start": ch.get("page_start", 0),
-            "page_end": ch.get("page_end", 0),
-        }
-        for ch in merged_chapters
-    ]
+    chunk_metadata = [{"title": a.split("\n")[0].strip() if a else "", "page_start": 0, "page_end": total_pages} for a in articles]
 
-    await report(
-        "storing",
-        1,
-        1,
-        f"Guardando {len(texts)} capitulos en FAISS...",
-        chunks_found=len(texts),
-    )
+    await report("storing", 1, 1, f"Guardando {len(texts)} articulos en FAISS...", chunks_found=len(texts))
     vector_store.add_document(doc_id, texts, embeddings, chunk_metadata, filename=filename)
 
+    all_references = []
+    if extract_references:
+        processed = 0
+        with_refs = 0
+        total_articles = len(articles)
+        for i, text in enumerate(articles):
+            title = text.strip().split("\n")[0].strip()[:80] if text else f"Chunk-{i}"
+
+            await report("detecting", i + 1, total_articles, f"Extrayendo referencias de {title}...", chunks_found=len(texts))
+            try:
+                llm_title, refs = await chapter_service.extract_references(title, text)
+                processed += 1
+                if llm_title and llm_title != title:
+                    vector_store.update_chunk_title(doc_id, i, llm_title)
+                if refs:
+                    all_references.append(refs)
+                    with_refs += 1
+                    print(f"     ↳ {title}: {len(refs)} referencias")
+            except Exception as e:
+                print(f"     ⚠️  Error en {title}: {e}")
+
+        if processed > 0:
+            print(f"     📊 Referencias: {with_refs}/{processed} articulos con referencias, {sum(len(r) for r in all_references)} totales")
+        else:
+            print(f"     ⚠️  No se proceso ningun articulo para referencias")
+    else:
+        print("     ⏭️  Extraccion de referencias omitida (toggle OFF)")
+
+    doc_meta = _extract_doc_metadata_from_articles(articles)
+
     print(f"{'='*60}")
-    print(f"  ✅ COMPLETADO: {len(texts)} capitulos indexados")
-    print(f"  📊 {total_pages} paginas → {total_windows} lotes → {len(texts)} chunks finales")
+    print(f"  ✅ COMPLETADO: {len(texts)} articulos indexados")
+    print(f"  📊 {total_pages} paginas → {len(articles)} articulos")
+    print(f"  🔗 {sum(len(r) for r in all_references)} referencias detectadas")
+    if doc_meta.get("doc_number"):
+        print(f"  📋 Documento: {doc_meta.get('doc_type')} {doc_meta.get('doc_number')}")
     print(f"{'='*60}\n")
 
-    return len(texts)
+    return len(texts), [[{"title": a.split("\n")[0].strip()[:80], "content": a}] for a in articles], all_references, filtered_titles, doc_meta
+
+
+def _extract_article_number(title: str) -> int | None:
+    match = re.search(r"art[ií]culo\s+(\d+)", title.lower())
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _is_title_one_range(article_num: int) -> bool:
+    return article_num <= TITLE_ONE_MAX
+
+
+def _filter_title_one_articles(articles: list[str]) -> list[str]:
+    result = []
+    removed = 0
+    for a in articles:
+        first_line = a.split("\n")[0].strip() if a else ""
+        if not first_line.lower().startswith("artic"):
+            result.append(a)
+            continue
+        num = _extract_article_number(first_line)
+        if num is not None and num not in TITLE_ONE_WHITELIST and _is_title_one_range(num):
+            removed += 1
+        else:
+            result.append(a)
+    if removed:
+        print(f"     🔍 Filtrados {removed} articulos de TITULO I")
+    return result
+
+
+def _extract_doc_metadata_from_articles(articles: list[str]) -> dict:
+    if not articles:
+        return {}
+    content = articles[0][:500]
+    title = articles[0].split("\n")[0].strip() if articles[0] else ""
+
+    doc_type = "otro"
+    type_match = re.search(r"(resoluci[oó]n|circular|ley|decreto|reglamento)", title.lower())
+    if not type_match:
+        type_match = re.search(r"(resoluci[oó]n|circular|ley|decreto|reglamento)", content)
+    if type_match:
+        doc_type = type_match.group(1)
+
+    doc_number = ""
+    num_match = re.search(r"(?:N[°º]|No\.|numero)\s*[:.]?\s*([\d\/\-A-Za-z]+)", content, re.IGNORECASE)
+    if not num_match:
+        num_match = re.search(r"(?:RD|DS)\s*[:.]?\s*([\d\/\-]+)", content, re.IGNORECASE)
+    if num_match:
+        doc_number = num_match.group(0).strip()
+
+    doc_title = ""
+    for a in articles[:3]:
+        line_match = re.search(r"^(?:RESOLUCI[OÓ]N|CIRCULAR|REGLAMENTO)[^.]*", a, re.IGNORECASE | re.MULTILINE)
+        if line_match:
+            doc_title = line_match.group(0).strip()[:200]
+            break
+
+    doc_date = ""
+    date_match = re.search(r"(\d{1,2})\s+de\s+([a-z]+)\s+de\s+(\d{4})", content, re.IGNORECASE)
+    if not date_match:
+        date_match = re.search(r"(\d{2})[/-](\d{2})[/-](\d{4})", content)
+    if date_match:
+        doc_date = date_match.group(0)
+
+    issuing_body = ""
+    body_match = re.search(r"(Aduana Nacional|Gerencia Nacional Jur[ií]dica|Presidente Ejecutivo|Directorio)", content, re.IGNORECASE)
+    if body_match:
+        issuing_body = body_match.group(1)
+
+    return {
+        "doc_type": doc_type,
+        "doc_number": doc_number,
+        "doc_number_nrm": re.sub(r"[^a-z0-9]", "", doc_number.lower()) if doc_number else "",
+        "doc_title": doc_title,
+        "doc_date": doc_date,
+        "issuing_body": issuing_body or "",
+    }
 
 
 vector_store = VectorStore()

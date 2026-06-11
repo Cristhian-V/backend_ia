@@ -2,18 +2,22 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.models.user import User
 from app.models.document import Document
 from app.models.query_log import QueryLog
+from app.models.document_reference import DocumentReference
 from app.api.router import routers
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
+        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS core"))
         await conn.run_sync(Base.metadata.create_all)
     yield
 

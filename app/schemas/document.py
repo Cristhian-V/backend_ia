@@ -5,7 +5,12 @@ from pydantic import BaseModel
 class DocumentResponse(BaseModel):
     id: str
     filename: str
-    original_filename: str
+    page_count: int = 0
+    doc_type: str = "otro"
+    doc_number: str | None = None
+    doc_title: str | None = None
+    doc_date: str | None = None
+    issuing_body: str | None = None
     chunks_count: int
     status: str
     created_at: datetime
