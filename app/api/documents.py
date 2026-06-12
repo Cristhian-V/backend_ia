@@ -28,14 +28,15 @@ async def _process_document(
     try:
         from app.core.database import async_session
 
-        chunks, all_chapters, all_references, filtered_titles, doc_meta = await process_and_store(
-            filename, content, doc_id, pages,
-            on_progress=on_progress,
-            extract_references=extract_references,
-        )
-        await progress_tracker.set_done(doc_id, chunks)
-
         async with async_session() as db:
+            chunks, all_chapters, all_references, filtered_titles, doc_meta = await process_and_store(
+                filename, content, doc_id, pages,
+                on_progress=on_progress,
+                db=db,
+                extract_references=extract_references,
+            )
+            await progress_tracker.set_done(doc_id, chunks)
+
             result = await db.execute(select(Document).where(Document.id == doc_id))
             doc = result.scalar_one_or_none()
             if doc:
@@ -51,16 +52,15 @@ async def _process_document(
                     doc.issuing_body = doc_meta.get("issuing_body", "")
                 await db.commit()
 
-        if extract_references and all_references:
-            await progress_tracker.update(doc_id, "referencing", 1, 1, "Verificando referencias a otros documentos...")
-            async with async_session() as db:
+            if extract_references and all_references:
+                await progress_tracker.update(doc_id, "referencing", 1, 1, "Verificando referencias a otros documentos...")
                 pending_count = await reference_service.process_references(
                     db, user_id, doc_id, all_references, all_chapters, filtered_titles
                 )
                 await reference_service.resolve_existing_references(
                     db, doc_id, doc_meta.get("doc_number_nrm", "")
                 )
-            print(f"  🔗 {pending_count} documentos pendientes registrados")
+                print(f"  🔗 {pending_count} documentos pendientes registrados")
 
     except Exception as e:
         await progress_tracker.set_error(doc_id, str(e))

@@ -1,6 +1,6 @@
 from datetime import datetime
 from sqlalchemy import BigInteger, String, DateTime, func, ForeignKey, CheckConstraint, Index, text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -30,3 +30,5 @@ class Document(Base):
     chunks_count: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    chunks = relationship("DocumentChunk", backref="document", lazy="selectin", cascade="all, delete-orphan")

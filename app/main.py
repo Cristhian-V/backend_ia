@@ -10,6 +10,8 @@ from app.models.user import User
 from app.models.document import Document
 from app.models.query_log import QueryLog
 from app.models.document_reference import DocumentReference
+from app.models.document_chunk import DocumentChunk
+from app.services.vector_store import vector_store
 from app.api.router import routers
 
 
@@ -19,6 +21,18 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS core"))
         await conn.run_sync(Base.metadata.create_all)
+
+    # clean FAISS orphans
+    try:
+        async with engine.begin() as conn:
+            result = await conn.execute(text("SELECT id FROM core.documents"))
+            valid_ids = {row[0] for row in result.all()}
+        removed = vector_store.cleanup_orphans(valid_ids)
+        if removed:
+            print(f"  🧹 FAISS: {removed} chunks huerfanos eliminados ({len(valid_ids)} documentos validos)")
+    except Exception:
+        pass  # table might not exist on first run
+
     yield
 
 

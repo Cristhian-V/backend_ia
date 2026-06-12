@@ -1,7 +1,8 @@
 import re
 
 ARTICLE_SPLIT_PATTERN = re.compile(
-    r"^(ART[IÍ]CULO\s+\d+\s*(?:[º°]|\.(?:\s*[-–—])?)?\s*)",
+    r"^(ART[IÍ]CULO\s+\d+\b\s*(?:[º°]|\.(?:\s*[-–—])?)?)"
+    r"\s*(?!\s*de\s+la\b|\s*del\b|\s*de\s+los\b|\s*de\s+las\b)",
     re.IGNORECASE | re.MULTILINE,
 )
 

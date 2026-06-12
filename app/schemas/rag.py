@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class RAGQuery(BaseModel):
     query: str
     top_k: int | None = None
+    response_mode: str = "simple"
 
 
 class RAGChunk(BaseModel):

@@ -1,11 +1,14 @@
 import json
 import os
 import re
+import uuid
 
 import numpy as np
 import faiss
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.models.document_chunk import DocumentChunk
 from app.services.ollama import ollama_service
 
 
@@ -99,6 +102,44 @@ class VectorStore:
         self._save_index()
         self._save_metadata()
 
+    def cleanup_orphans(self, valid_doc_ids: set[str]) -> int:
+        ids_to_delete = [
+            int(fid) for fid, meta in self.metadata.items()
+            if meta.get("doc_id", "") not in valid_doc_ids
+        ]
+        if not ids_to_delete:
+            return 0
+
+        removed = len(ids_to_delete)
+
+        keep_mask = np.ones(self.index.ntotal, dtype=bool)
+        keep_mask[ids_to_delete] = False
+        keep_indices = np.where(keep_mask)[0]
+
+        if len(keep_indices) == 0:
+            self.index = faiss.IndexFlatIP(self.dim)
+            self.metadata = {}
+        else:
+            old_vectors = np.zeros((self.index.ntotal, self.dim), dtype=np.float32)
+            self.index.reconstruct_n(0, self.index.ntotal, old_vectors)
+            new_vectors = old_vectors[keep_indices]
+
+            new_index = faiss.IndexFlatIP(self.dim)
+            new_index.add(new_vectors)
+
+            new_metadata = {}
+            for new_i, old_i in enumerate(keep_indices):
+                old_key = str(old_i)
+                if old_key in self.metadata:
+                    new_metadata[str(new_i)] = self.metadata[old_key]
+
+            self.index = new_index
+            self.metadata = new_metadata
+
+        self._save_index()
+        self._save_metadata()
+        return removed
+
     def update_chunk_title(self, doc_id: str, chunk_index: int, new_title: str) -> None:
         for fid, meta in self.metadata.items():
             if meta.get("doc_id") == doc_id and meta.get("chunk_index") == chunk_index:
@@ -120,6 +161,20 @@ class VectorStore:
                 })
         items.sort(key=lambda x: x["chunk_index"])
         return items
+
+    def get_chunk_by_index(self, doc_id: str, chunk_index: int) -> dict | None:
+        for fid, meta in self.metadata.items():
+            if meta.get("doc_id") == doc_id and meta.get("chunk_index") == chunk_index:
+                return {
+                    "id": fid,
+                    "doc_id": meta["doc_id"],
+                    "chunk_index": meta["chunk_index"],
+                    "text": meta["text"],
+                    "chapter_title": meta.get("chapter_title", ""),
+                    "page_start": meta.get("page_start", 0),
+                    "page_end": meta.get("page_end", 0),
+                }
+        return None
 
     def search(self, query_embedding: list[float], top_k: int | None = None) -> list[dict]:
         k = min(top_k or settings.top_k, self.index.ntotal)
@@ -159,6 +214,7 @@ async def process_and_store(
     doc_id: str,
     pages: list[str],
     on_progress=None,
+    db: AsyncSession | None = None,
     extract_references: bool = True,
 ) -> tuple[int, list[list[dict]], list[list[dict]], set[str], dict]:
     from app.services.article_splitter import article_splitter
@@ -203,10 +259,24 @@ async def process_and_store(
     embeddings = await ollama_service.embed(texts)
     print(f"     ↳ {len(embeddings)} embeddings generados (dim=1024)")
 
-    chunk_metadata = [{"title": a.split("\n")[0].strip() if a else "", "page_start": 0, "page_end": total_pages} for a in articles]
+    chunk_metadata = [{"title": _extract_chunk_title(a), "page_start": 0, "page_end": total_pages} for a in articles]
 
     await report("storing", 1, 1, f"Guardando {len(texts)} articulos en FAISS...", chunks_found=len(texts))
     vector_store.add_document(doc_id, texts, embeddings, chunk_metadata, filename=filename)
+
+    if db is not None:
+        for i, article_text in enumerate(articles):
+            title = _extract_chunk_title(article_text)[:200]
+            db.add(DocumentChunk(
+                id=str(uuid.uuid4()),
+                document_id=doc_id,
+                chunk_index=i,
+                chapter_title=title,
+                page_start=0,
+                page_end=total_pages,
+            ))
+        await db.flush()
+        print(f"     ↳ {len(articles)} chunks persistidos en PostgreSQL")
 
     all_references = []
     if extract_references:
@@ -246,7 +316,7 @@ async def process_and_store(
         print(f"  📋 Documento: {doc_meta.get('doc_type')} {doc_meta.get('doc_number')}")
     print(f"{'='*60}\n")
 
-    return len(texts), [[{"title": a.split("\n")[0].strip()[:80], "content": a}] for a in articles], all_references, filtered_titles, doc_meta
+    return len(texts), [[{"title": _extract_chunk_title(a), "content": a}] for a in articles], all_references, filtered_titles, doc_meta
 
 
 def _extract_article_number(title: str) -> int | None:
@@ -276,6 +346,39 @@ def _filter_title_one_articles(articles: list[str]) -> list[str]:
     if removed:
         print(f"     🔍 Filtrados {removed} articulos de TITULO I")
     return result
+
+
+def _extract_chunk_title(text: str) -> str:
+    if not text:
+        return ""
+
+    first_line = text.split("\n")[0].strip()
+
+    if re.match(r"^(?:ART[IÍ]CULO|T[IÍ]TULO|CAP[IÍ]TULO|SECCI[OÓ]N)\b", first_line, re.IGNORECASE):
+        return first_line[:80]
+
+    patterns = [
+        r"T[IÍ]TULO\s+.{0,60}",
+        r"CAP[IÍ]TULO\s+.{0,60}",
+        r"REGLAMENTO\s+(?:DE|DEL)\s+.{0,60}",
+        r"RESOLUCI[OÓ]N\s+(?:DE|DEL|MINISTERIAL|ADMINISTRATIVA)\s+.{0,60}",
+        r"CIRCULAR\s+(?:No\.?|N[°º])\s*.{0,60}",
+        r"DECRETO\s+SUPREMO\s+.{0,40}",
+        r"LEY\s+(?:No\.?|N[°º])\s*.{0,60}",
+    ]
+
+    for pat in patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            return m.group(0).strip()[:80]
+
+    if re.match(r"^\d+$", first_line):
+        for line in text.split("\n")[1:]:
+            line = line.strip()
+            if len(line) > 5:
+                return line[:80]
+
+    return first_line[:80]
 
 
 def _extract_doc_metadata_from_articles(articles: list[str]) -> dict:

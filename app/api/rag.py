@@ -15,7 +15,7 @@ router = APIRouter(prefix="/rag", tags=["rag"])
 
 @router.post("/query", response_model=RAGResponse)
 async def rag_query(body: RAGQuery, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
-    result = await rag_service.query(body.query, body.top_k)
+    result = await rag_service.query(body.query, db, body.top_k, body.response_mode)
 
     log = QueryLog(
         user_id=current_user.id,
