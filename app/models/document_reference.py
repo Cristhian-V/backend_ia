@@ -3,17 +3,18 @@ from sqlalchemy import BigInteger, String, DateTime, func, ForeignKey, CheckCons
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.constants import RELATION_TYPES, REF_TYPES
 
 
 class DocumentReference(Base):
     __tablename__ = "document_references"
     __table_args__ = (
         CheckConstraint(
-            "relation IN ('deroga','modifica','referencia','complementa','base_legal')",
+            f"relation IN ({','.join(repr(r) for r in RELATION_TYPES)})",
             name="ck_refs_relation",
         ),
         CheckConstraint(
-            "ref_type IN ('resolucion','circular','ley','decreto','reglamento','otro')",
+            f"ref_type IN ({','.join(repr(r) for r in REF_TYPES)})",
             name="ck_refs_type",
         ),
         Index("ix_refs_pending", "user_id", "created_at", postgresql_where=text("resolved_document_id IS NULL")),

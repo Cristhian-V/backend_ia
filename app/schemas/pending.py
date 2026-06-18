@@ -18,6 +18,7 @@ class PendingResponse(BaseModel):
 
 class ResolveRequest(BaseModel):
     document_id: str | None
+    cascade: bool = True
 
 
 class SourceRef(BaseModel):
@@ -25,6 +26,8 @@ class SourceRef(BaseModel):
     chapter_title: str
     ref_article: str
     source_filename: str
+    chunk_text: str = ""
+    resolved: bool = False
 
 
 class PendingGroupResponse(BaseModel):

@@ -1,5 +1,4 @@
 import asyncio
-from typing import Optional
 
 
 class ProgressTracker:
@@ -57,13 +56,9 @@ class ProgressTracker:
                 self._progress[doc_id]["message"] = "Completado"
                 self._progress[doc_id]["chunks_found"] = chunks
 
-    async def get(self, doc_id: str) -> Optional[dict]:
+    async def get(self, doc_id: str) -> dict | None:
         async with self._lock:
             return self._progress.get(doc_id)
-
-    async def remove(self, doc_id: str):
-        async with self._lock:
-            self._progress.pop(doc_id, None)
 
 
 progress_tracker = ProgressTracker()

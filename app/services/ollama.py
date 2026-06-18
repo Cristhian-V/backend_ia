@@ -36,13 +36,5 @@ class OllamaService:
             resp.raise_for_status()
             return resp.json()["message"]["content"]
 
-    async def health_check(self) -> bool:
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(self.base_url)
-                return resp.is_success
-        except httpx.RequestError:
-            return False
-
 
 ollama_service = OllamaService()

@@ -162,20 +162,6 @@ class VectorStore:
         items.sort(key=lambda x: x["chunk_index"])
         return items
 
-    def get_chunk_by_index(self, doc_id: str, chunk_index: int) -> dict | None:
-        for fid, meta in self.metadata.items():
-            if meta.get("doc_id") == doc_id and meta.get("chunk_index") == chunk_index:
-                return {
-                    "id": fid,
-                    "doc_id": meta["doc_id"],
-                    "chunk_index": meta["chunk_index"],
-                    "text": meta["text"],
-                    "chapter_title": meta.get("chapter_title", ""),
-                    "page_start": meta.get("page_start", 0),
-                    "page_end": meta.get("page_end", 0),
-                }
-        return None
-
     def search(self, query_embedding: list[float], top_k: int | None = None) -> list[dict]:
         k = min(top_k or settings.top_k, self.index.ntotal)
         if k == 0:
@@ -306,7 +292,7 @@ async def process_and_store(
     else:
         print("     ⏭️  Extraccion de referencias omitida (toggle OFF)")
 
-    doc_meta = _extract_doc_metadata_from_articles(articles)
+    doc_meta = _extract_doc_metadata_from_articles(articles, filename)
 
     print(f"{'='*60}")
     print(f"  ✅ COMPLETADO: {len(texts)} articulos indexados")
@@ -381,7 +367,7 @@ def _extract_chunk_title(text: str) -> str:
     return first_line[:80]
 
 
-def _extract_doc_metadata_from_articles(articles: list[str]) -> dict:
+def _extract_doc_metadata_from_articles(articles: list[str], filename: str = "") -> dict:
     if not articles:
         return {}
     content = articles[0][:500]
@@ -395,11 +381,26 @@ def _extract_doc_metadata_from_articles(articles: list[str]) -> dict:
         doc_type = type_match.group(1)
 
     doc_number = ""
-    num_match = re.search(r"(?:N[°º]|No\.|numero)\s*[:.]?\s*([\d\/\-A-Za-z]+)", content, re.IGNORECASE)
+    # Try specific patterns first (RD, DS, Circular, etc.)
+    num_match = re.search(r"(?:RD|DS|RESOLUCI[OÓ]N)\s*(?:N[°º]\s*)?[:.]?\s*([\d\/\-]+)", content, re.IGNORECASE)
     if not num_match:
-        num_match = re.search(r"(?:RD|DS)\s*[:.]?\s*([\d\/\-]+)", content, re.IGNORECASE)
+        num_match = re.search(r"(?:CIRCULAR)\s*(?:No\.?|N[°º])?\s*[:.]?\s*([\d\/\-]+)", content, re.IGNORECASE)
+    if not num_match:
+        # Generic fallback: "No. X", "N° X", etc.
+        num_match = re.search(r"(?:N[°º]|No\.|numero)\s*[:.]?\s*([\d\/\-]+(?:\s*de\s*\d+)?)", content, re.IGNORECASE)
     if num_match:
         doc_number = num_match.group(0).strip()
+
+    # If doc_number from content is a circular but filename says otherwise, discard it
+    fn_nrm = re.sub(r"[^a-z0-9]", "", filename.rsplit(".", 1)[0].lower()) if "." in filename else ""
+    if doc_number and fn_nrm:
+        doc_nrm_lower = re.sub(r"[^a-z0-9]", "", doc_number.lower())
+        if (doc_nrm_lower.startswith("circular") or "circularno" in doc_nrm_lower) and not fn_nrm.startswith("circular"):
+            doc_number = ""
+
+    # Fallback: use filename if content extraction failed or was discarded
+    if not doc_number and filename:
+        doc_number = filename.rsplit(".", 1)[0].strip()
 
     doc_title = ""
     for a in articles[:3]:
@@ -420,10 +421,44 @@ def _extract_doc_metadata_from_articles(articles: list[str]) -> dict:
     if body_match:
         issuing_body = body_match.group(1)
 
+    # Detect master documents by filename ONLY (most reliable)
+    fn_lower = filename.lower()
+
+    master_doc = ""
+
+    # Priority 1: filename check (most reliable)
+    if "reglamento" in fn_lower and ("lga" in fn_lower or "ley general" in fn_lower or "reglamento a la ley" in fn_lower or "reglamento de la ley" in fn_lower):
+        master_doc = "reglamentolga"
+        doc_type = "reglamento"
+        doc_number = "Reglamento LGA"
+        doc_title = "Reglamento a la Ley General de Aduanas"
+    elif "reglamento" in fn_lower and ("ctb" in fn_lower or "tributario" in fn_lower):
+        pass  # handled below
+    elif ("ley general" in fn_lower or "lga" in fn_lower) and "reglamento" not in fn_lower:
+        master_doc = "leygeneraldeaduanas"
+        doc_type = "ley"
+        doc_number = "Ley General de Aduanas"
+        doc_title = "Ley General de Aduanas"
+    elif "codigo tributario" in fn_lower or "ctb" in fn_lower:
+        master_doc = "codigotributarioboliviano"
+        doc_type = "ley"
+        doc_number = "Codigo Tributario Boliviano"
+        doc_title = "Codigo Tributario Boliviano"
+
+    # Priority 2: content check (fallback)
+    # Only apply if filename doesn't already identify the doc type
+    is_identified_by_filename = bool(
+        re.search(r"(?:RD|Cir\.|Circular|DS|D\.S\.|Res\.|RM|RBM|GEGPC|DTA|DNP|AN/PE)", fn_lower)
+        or re.search(r"\d{2}[-–]\d{3}[-–]\d{2}", fn_lower)
+    )
+
+    if is_identified_by_filename and not master_doc:
+        doc_title = ""
+
     return {
         "doc_type": doc_type,
         "doc_number": doc_number,
-        "doc_number_nrm": re.sub(r"[^a-z0-9]", "", doc_number.lower()) if doc_number else "",
+        "doc_number_nrm": master_doc if master_doc else (re.sub(r"[^a-z0-9]", "", doc_number.lower()) if doc_number else ""),
         "doc_title": doc_title,
         "doc_date": doc_date,
         "issuing_body": issuing_body or "",

@@ -25,6 +25,7 @@ async def db_engine():
     async with engine.begin() as conn:
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS core"))
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield engine
     async with engine.begin() as conn:
@@ -45,14 +46,3 @@ async def client(db_engine):
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     app.dependency_overrides.clear()
-
-
-@pytest_asyncio.fixture
-async def auth_headers(client):
-    resp = await client.post("/auth/register", json={
-        "email": "fixture@test.com",
-        "password": "fixture123",
-        "full_name": "Fixture User",
-    })
-    token = resp.json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}

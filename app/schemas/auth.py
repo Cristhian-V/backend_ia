@@ -17,9 +17,16 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class ToolInfo(BaseModel):
+    tool_key: str
+    role: str | None = None
+
+
 class UserResponse(BaseModel):
     id: int
     email: str
     full_name: str
+    is_admin: bool = False
+    tools: list[ToolInfo] = []
 
     model_config = {"from_attributes": True}

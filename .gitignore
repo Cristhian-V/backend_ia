@@ -4,6 +4,10 @@ __pycache__/
 data/
 chroma_data/
 .venv/
+venv/
+.pytest_cache/
+app/logs/
 *.egg-info/
 dist/
 build/
+package-lock.json

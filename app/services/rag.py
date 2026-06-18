@@ -134,14 +134,10 @@ class RAGService:
         doc_filenames: dict[str, str] = {}
         max_articles = 5
 
-        print(f"  [multi-hop] INICIO — {len(results)} resultados de FAISS")
-
-        for i_r, r in enumerate(results):
+        for r in results:
             doc_id = r["doc_id"]
-            print(f"  [multi-hop]   result {i_r}: doc_id={doc_id[:16]}... chapter_title={r.get('chapter_title','')[:60]}")
 
             if doc_id in seen_docs:
-                print(f"  [multi-hop]   → ya visto, skip")
                 continue
             seen_docs.add(doc_id)
 
@@ -149,7 +145,6 @@ class RAGService:
                 select(Document.id).where(Document.id == doc_id).limit(1)
             )
             if not exists.scalar_one_or_none():
-                print(f"  [multi-hop]   → doc_id NO existe en DB (huerfano), skip")
                 continue
 
             refs_result = await db.execute(
@@ -161,27 +156,21 @@ class RAGService:
                 .limit(10)
             )
             refs = refs_result.scalars().all()
-            print(f"  [multi-hop]   → {len(refs)} referencias resueltas encontradas")
 
-            for i_ref, ref in enumerate(refs):
+            for ref in refs:
                 if not ref.resolved_document_id:
-                    print(f"  [multi-hop]     ref {i_ref}: sin resolved_document_id, skip")
                     continue
 
                 articles = self._split_article_numbers(ref.ref_article)
-                print(f"  [multi-hop]     ref {i_ref}: article={ref.ref_article[:30]} → nums={articles}")
 
                 if not articles:
-                    print(f"  [multi-hop]     → sin articulos, skip")
                     continue
 
                 chunks = vector_store.get_document_chunks(ref.resolved_document_id)
-                print(f"  [multi-hop]     → get_document_chunks('{ref.resolved_document_id[:16]}...') = {len(chunks)} chunks")
 
                 for art_num in articles:
                     found = self._find_chunk_by_article(chunks, art_num)
                     if found:
-                        print(f"  [multi-hop]     → art {art_num}: ENCONTRADO idx={found['chunk_index']}")
                         resolved_id = ref.resolved_document_id
                         if resolved_id not in doc_filenames:
                             fn_result = await db.execute(
@@ -191,20 +180,12 @@ class RAGService:
                         found["original_filename"] = doc_filenames[resolved_id]
                         extra.append(found)
                         break
-                    else:
-                        print(f"  [multi-hop]     → art {art_num}: NO ENCONTRADO en {len(chunks)} chunks")
 
                 if len(extra) >= max_articles:
-                    print(f"  [multi-hop]   → max_articles alcanzado ({max_articles})")
                     break
 
             if len(extra) >= max_articles:
                 break
-
-        if extra:
-            print(f"  [multi-hop] FIN: {len(extra)} chunks extras")
-        else:
-            print(f"  [multi-hop] FIN: 0 chunks extras (vacio)")
 
         return extra
 

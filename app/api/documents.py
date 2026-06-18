@@ -1,8 +1,9 @@
 import uuid
 import asyncio
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
-from sqlalchemy import select, delete
+from sqlalchemy import select, update as sql_update, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -50,6 +51,42 @@ async def _process_document(
                     doc.doc_title = doc_meta.get("doc_title")
                     doc.doc_date = doc_meta.get("doc_date")
                     doc.issuing_body = doc_meta.get("issuing_body", "")
+                await db.commit()
+
+            # Auto-match checklist
+            doc_nrm = doc_meta.get("doc_number_nrm", "")
+            fn_nrm = re.sub(r"[^a-z0-9]", "", filename.rsplit(".", 1)[0].lower()) if "." in filename else ""
+
+            if doc_nrm or fn_nrm:
+                from app.models.checklist import Checklist
+
+                # Master documents: mark entire category
+                master_map = {
+                    "leygeneraldeaduanas": "LGA",
+                    "reglamentolga": "RLGA",
+                    "codigotributarioboliviano": "CTB",
+                }
+                if doc_nrm in master_map:
+                    cat = master_map[doc_nrm]
+                    await db.execute(
+                        sql_update(Checklist)
+                        .where(Checklist.categoria == cat, Checklist.subido == False)
+                        .values(subido=True, documento_id=doc_id)
+                    )
+                else:
+                    # Individual docs: try both metadata and filename normalized codes
+                    conditions = []
+                    if doc_nrm:
+                        conditions.append(func.regexp_replace(func.lower(Checklist.codigo), "[^a-z0-9]", "", "g") == doc_nrm)
+                    if fn_nrm and fn_nrm != doc_nrm:
+                        conditions.append(func.regexp_replace(func.lower(Checklist.codigo), "[^a-z0-9]", "", "g") == fn_nrm)
+
+                    if conditions:
+                        await db.execute(
+                            sql_update(Checklist)
+                            .where(Checklist.subido == False, or_(*conditions))
+                            .values(subido=True, documento_id=doc_id)
+                        )
                 await db.commit()
 
             if extract_references and all_references:

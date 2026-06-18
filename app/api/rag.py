@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -51,3 +51,17 @@ async def get_history_item(
     if not log:
         raise HTTPException(status_code=404, detail="Consulta no encontrada")
     return log
+
+
+@router.get("/history/all", response_model=list[QueryLogResponse])
+async def get_all_history(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if not current_user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Acceso denegado: se requiere administrador")
+
+    result = await db.execute(
+        select(QueryLog).order_by(QueryLog.created_at.desc()).limit(200)
+    )
+    return result.scalars().all()

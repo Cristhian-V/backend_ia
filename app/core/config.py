@@ -13,8 +13,6 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://cumbre:cumbre123@localhost:5432/cumbre_ia"
     chroma_persist_dir: str = "./chroma_data"
 
-    chunk_size: int = 500
-    chunk_overlap: int = 50
     top_k: int = 5
 
     model_config = {"env_file": ".env"}

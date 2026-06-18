@@ -58,6 +58,20 @@ async def resolve_reference(
             raise HTTPException(status_code=404, detail="Documento no encontrado")
 
     ref.resolved_document_id = body.document_id
+
+    if body.cascade:
+        cascade_q = update(DocumentReference).where(
+            DocumentReference.user_id == current_user.id,
+            DocumentReference.ref_number_nrm == ref.ref_number_nrm,
+            DocumentReference.id != ref.id,
+        )
+        if body.document_id:
+            cascade_q = cascade_q.where(DocumentReference.resolved_document_id.is_(None))
+        else:
+            cascade_q = cascade_q.where(DocumentReference.resolved_document_id.is_not(None))
+        cascade_q = cascade_q.values(resolved_document_id=body.document_id)
+        await db.execute(cascade_q)
+
     await db.commit()
     return {"status": "ok"}
 
@@ -79,4 +93,24 @@ async def unresolve_reference(
         raise HTTPException(status_code=404, detail="Referencia no encontrada")
 
     ref.resolved_document_id = None
+    await db.commit()
+
+
+@router.delete("/{ref_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_reference(
+    ref_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(DocumentReference).where(
+            DocumentReference.id == ref_id,
+            DocumentReference.user_id == current_user.id,
+        )
+    )
+    ref = result.scalar_one_or_none()
+    if not ref:
+        raise HTTPException(status_code=404, detail="Referencia no encontrada")
+
+    await db.delete(ref)
     await db.commit()

@@ -4,6 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
 from app.models.document_reference import DocumentReference
+from app.services.vector_store import vector_store
+from app.constants import REF_TYPES, RELATION_TYPES
 
 
 class ReferenceService:
@@ -81,7 +83,7 @@ class ReferenceService:
 
     LEGAL_FRAMEWORK_TERMS = ["marco legal", "marco normativo", "base legal", "marco juridico"]
 
-    VALID_REF_TYPES = {"resolucion", "circular", "ley", "decreto", "reglamento", "otro"}
+    VALID_REF_TYPES = set(REF_TYPES)
 
     REF_TYPE_MAP = {
         "resolución": "resolucion",
@@ -107,7 +109,7 @@ class ReferenceService:
 
     def _normalize_relation(self, relation: str) -> str:
         r = relation.strip().lower()
-        valid = {"deroga", "modifica", "referencia", "complementa", "base_legal"}
+        valid = set(RELATION_TYPES)
         if r in valid:
             return r
         if "derog" in r:
@@ -133,6 +135,20 @@ class ReferenceService:
     def _is_legal_framework(self, chapter_title: str) -> bool:
         title = chapter_title.lower()
         return any(term in title for term in self.LEGAL_FRAMEWORK_TERMS)
+
+    def _find_chunk_text(self, faiss_by_doc: dict, doc_id: str, db_title: str) -> str:
+        entries = faiss_by_doc.get(doc_id, [])
+        if not entries:
+            return ""
+        db_title_nrm = self.normalize(db_title)
+        for faiss_title, text in entries:
+            faiss_nrm = self.normalize(faiss_title)
+            if db_title_nrm and faiss_nrm:
+                if db_title_nrm.startswith(faiss_nrm) or faiss_nrm.startswith(db_title_nrm):
+                    return text
+                if db_title_nrm[:40] == faiss_nrm[:40]:
+                    return text
+        return ""
 
     async def _load_existing_docs(self, db: AsyncSession, user_id: int) -> dict[str, str]:
         result = await db.execute(
@@ -210,9 +226,24 @@ class ReferenceService:
             for doc_id, name in doc_result.all():
                 doc_names[doc_id] = name
 
+        # Pre-index FAISS metadata by doc_id for faster lookup
+        faiss_by_doc: dict[str, list[tuple[str, str]]] = {}
+        for fid, meta in vector_store.metadata.items():
+            did = meta.get("doc_id", "")
+            title = meta.get("chapter_title", "")
+            text = meta.get("text", "")
+            if did and title and text:
+                if did not in faiss_by_doc:
+                    faiss_by_doc[did] = []
+                faiss_by_doc[did].append((title, text))
+
         groups: dict[str, dict] = {}
         for r in rows:
-            key = f"{r.ref_type}|{r.ref_number_nrm}|{self.normalize(r.ref_title)}"
+            art = (r.ref_article or "").strip().lower()
+            if art in ("", "n/a", "(no especificado)", "none", "null"):
+                continue
+
+            key = f"{r.ref_type}|{r.ref_number_nrm}"
             if key not in groups:
                 groups[key] = {
                     "ref_type": r.ref_type,
@@ -228,10 +259,14 @@ class ReferenceService:
                 "chapter_title": r.chapter_title,
                 "ref_article": r.ref_article,
                 "source_filename": doc_names.get(r.source_document_id, r.source_document_id),
+                "chunk_text": self._find_chunk_text(faiss_by_doc, r.source_document_id, r.chapter_title),
+                "resolved": r.resolved_document_id is not None,
             })
             groups[key]["ref_ids"].append(r.id)
             if r.resolved_document_id is not None:
                 groups[key]["resolved"] = True
+            if len(r.ref_title) > len(groups[key]["ref_title"]):
+                groups[key]["ref_title"] = r.ref_title
 
         return list(groups.values())
 

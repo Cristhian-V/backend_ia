@@ -1,9 +1,12 @@
 import re
 
 from app.services.ollama import ollama_service
+from app.constants import REF_TYPES, RELATION_TYPES
 
+_TYPE_LIST = ", ".join(REF_TYPES)
+_RELATION_LIST = ", ".join(RELATION_TYPES)
 
-REFERENCE_ONLY_PROMPT = """Eres un analista de documentos legales especializado en normativas aduaneras bolivianas. Recibiras el texto de UN SOLO articulo de un reglamento. Tienes DOS tareas:
+REFERENCE_ONLY_PROMPT = f"""Eres un analista de documentos legales especializado en normativas aduaneras bolivianas. Recibiras el texto de UN SOLO articulo de un reglamento. Tienes DOS tareas:
 
 1. Identificar el titulo exacto del articulo tal como aparece en el texto.
 2. Identificar todas las referencias a otros documentos legales mencionados.
@@ -30,11 +33,11 @@ NINGUNA
 
 Reglas:
 - TITLE: copia EXACTAMENTE el encabezado del articulo como aparece en el texto, sin modificarlo
-- TYPE: resolucion, circular, ley, decreto, reglamento, otro
+- TYPE: {_TYPE_LIST}
 - NUMBER: numero o codigo del documento (ej: "RD 01-098-24", "323/2024", "2492", "CTB")
 - TITLE de REFERENCE: nombre del documento referenciado
 - ARTICLE: articulos citados separados por coma
-- RELATION: deroga, modifica, referencia, complementa, base_legal"""
+- RELATION: {_RELATION_LIST}"""
 
 
 class ChapterService:
@@ -54,20 +57,19 @@ class ChapterService:
         if "NINGUNA" in cleaned.upper():
             return extracted_title, []
 
-        _, references = self._parse_response(cleaned)
+        references = self._parse_response(cleaned)
         return extracted_title, references
 
     def _extract_title_from_response(self, raw: str) -> str:
         match = re.search(r"^TITLE:\s*(.+?)(?:\n|$)", raw, re.IGNORECASE | re.MULTILINE)
         return match.group(1).strip() if match else ""
 
-    def _parse_response(self, raw: str) -> tuple[list[dict], list[dict]]:
+    def _parse_response(self, raw: str) -> list[dict]:
         raw = raw.strip()
         raw = raw.replace("```", "").strip()
 
         blocks = re.split(r"\n?---(CHAPTER|REFERENCE)---\n?", raw)
 
-        chapters = []
         references = []
 
         i = 1
@@ -81,7 +83,7 @@ class ChapterService:
                 if ref:
                     references.append(ref)
 
-        return chapters, references
+        return references
 
     def _parse_reference_block(self, block: str) -> dict | None:
         ref_type = self._extract_field(block, "TYPE")

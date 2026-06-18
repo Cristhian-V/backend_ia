@@ -5,7 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.core.security import hash_password, verify_password, create_access_token, get_current_user
 from app.models.user import User
+from app.models.user_tool import UserTool
 from app.schemas.auth import RegisterRequest, LoginRequest, TokenResponse, UserResponse
+from app.constants import TOOL_KEYS
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -28,6 +30,10 @@ async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(user)
 
+    # Assign default tools to new users
+    db.add(UserTool(user_id=user.id, tool_key=TOOL_KEYS[0], role="consultor"))
+    await db.commit()
+
     token = create_access_token({"sub": str(user.id)})
     return TokenResponse(access_token=token)
 
@@ -44,5 +50,16 @@ async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/me", response_model=UserResponse)
-async def me(current_user: User = Depends(get_current_user)):
-    return current_user
+async def me(current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    tools_result = await db.execute(
+        select(UserTool.tool_key, UserTool.role).where(UserTool.user_id == current_user.id)
+    )
+    tools = [{"tool_key": row[0], "role": row[1]} for row in tools_result.all()]
+
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "full_name": current_user.full_name,
+        "is_admin": current_user.is_admin,
+        "tools": tools,
+    }
