@@ -45,20 +45,41 @@ FOOTER_PATTERNS = [
 
 class ArticleSplitter:
     def split(self, text: str) -> list[str]:
-        # Priority 1: always check ARTICULO pattern first (most common)
+        chunks = [text.strip()] if text.strip() else []
+
+        # Paso 1: Dividir por ARTÍCULOS si existen
         if list(ARTICLE_SPLIT_PATTERN.finditer(text)):
             chunks = self._split_with(text, ARTICLE_SPLIT_PATTERN)
-            print(f"     Splitter: patron 'articulo' -> {len(chunks)} fragmentos")
-            return chunks
+            print(f"     Splitter: patron 'articulo' -> {len(chunks)} fragmentos iniciales")
+            
+            # Paso 1.5: Revisar si dentro de esos artículos (especialmente el último) hay ANEXOS
+            final_chunks = []
+            anexos_encontrados = 0
+            for chunk in chunks:
+                if list(ANEXO_SPLIT_PATTERN.finditer(chunk)):
+                    sub_chunks = self._split_with(chunk, ANEXO_SPLIT_PATTERN)
+                    final_chunks.extend(sub_chunks)
+                    anexos_encontrados += (len(sub_chunks) - 1)
+                else:
+                    final_chunks.append(chunk)
+            
+            if anexos_encontrados > 0:
+                print(f"     Splitter: patron 'anexo' aplicado -> se extrajeron {anexos_encontrados} anexos")
+            
+            return final_chunks
 
-        # Priority 2: cascade patterns, best-split wins
-        best_chunks: list[str] = [text.strip()] if text.strip() else []
+        # Paso 2: Si NO hubo artículos, probamos la cascada (Resoluciones, Numerales, Literales)
+        best_chunks = chunks
         best_pattern = "ninguno"
 
         for pattern, name, min_chunks in CASCADE_PATTERNS:
-            chunks = self._split_with(text, pattern)
-            if len(chunks) > len(best_chunks) and len(chunks) > min_chunks:
-                best_chunks = chunks
+            # Omitimos buscar anexos de nuevo porque ya no es el caso principal
+            if name == "anexo": 
+                continue 
+            
+            test_chunks = self._split_with(text, pattern)
+            if len(test_chunks) > len(best_chunks) and len(test_chunks) > min_chunks:
+                best_chunks = test_chunks
                 best_pattern = name
 
         if best_pattern != "ninguno":

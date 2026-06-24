@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     ollama_base_url: str = "http://192.168.1.10:11434"
     embed_model: str = "bge-m3:latest"
-    chat_model: str = "gemma4:e4b-32k"
+    chat_model: str = "gemma4:26b-32k"
 
     secret_key: str = "change-me-to-a-random-secret-key"
     algorithm: str = "HS256"

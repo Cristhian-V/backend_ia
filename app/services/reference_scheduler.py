@@ -144,7 +144,7 @@ async def scheduler_loop():
             if is_in_window() and not paused:
                 await process_pending_documents()
 
-            await asyncio.sleep(300)  # check every 5 minutes
+            await asyncio.sleep(300)
         except Exception as e:
             log(f"⚠️  Error en scheduler: {e}")
             await asyncio.sleep(300)

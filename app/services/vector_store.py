@@ -240,9 +240,81 @@ async def process_and_store(
         return 0, [], [], filtered_titles, {}
 
     texts = articles
+    
+    # ---------------------------------------------------------
+    # NUEVO: RED DE SEGURIDAD CON SUB-CHUNKING Y OVERLAP
+    # ---------------------------------------------------------
+    threshold_chars = 8000
+    chunk_size = 4000
+    overlap = 500
+    safe_texts = []
+    
+    for text in texts:
+        text_len = len(text)
+        if text_len <= threshold_chars:
+            safe_texts.append(text)
+        else:
+            print(f"        ⚠️ Fragmento gigante detectado ({text_len} caracteres). Aplicando sub-chunking con overlap...")
+            start = 0
+            
+            while start < text_len:
+                end = start + chunk_size
+                
+                # Intentar no cortar a mitad de una palabra buscando el último espacio
+                if end < text_len:
+                    last_space = text.rfind(' ', start, end)
+                    # Solo cortamos por el espacio si no perdemos más del 20% del chunk
+                    if last_space != -1 and last_space > start + (chunk_size * 0.8):
+                        end = last_space
+                else:
+                    end = text_len
+                
+                # Extraer y guardar el sub-chunk
+                chunk = text[start:end].strip()
+                if chunk:
+                    safe_texts.append(chunk)
+                
+                # Calcular el siguiente inicio retrocediendo el overlap
+                next_start = end - overlap
+                
+                # Protección contra bucles infinitos en caso de textos anómalos
+                if next_start <= start:
+                    start = end
+                else:
+                    start = next_start
+                    
+    # Reemplazamos la lista original con la lista segura
+    texts = safe_texts
+    # ---------------------------------------------------------
 
     await report("embedding", 1, 1, f"Generando embeddings con bge-m3 para {len(texts)} articulos...", chunks_found=len(texts))
-    embeddings = await ollama_service.embed(texts)
+    # Procesamiento por lotes para evitar saturar el modelo bge-m3 en CPU
+    batch_size = 5
+    embeddings = []
+    
+    for i in range(0, len(texts), batch_size):
+        current_batch_num = i // batch_size + 1
+        total_batches = ((len(texts) - 1) // batch_size) + 1
+        print(f"     ↳ Procesando batch {current_batch_num} de {total_batches}...")
+
+        batch = texts[i : i + batch_size]
+        
+        # MODO DIAGNÓSTICO: Imprimir la longitud de cada fragmento
+        for j, text in enumerate(batch):
+            print(f"        - Longitud del fragmento {j+1}: {len(text)} caracteres")
+            if len(text) > 8000:
+                print(f"        ⚠️ ADVERTENCIA: Este fragmento es gigantesco y podría colapsar el modelo.")
+                
+        try:
+            # Aquí es donde se congela actualmente
+            batch_embeddings = await ollama_service.embed(batch)
+            embeddings.extend(batch_embeddings)
+        except Exception as e:
+            print(f"     ❌ ERROR CRÍTICO en el batch {current_batch_num}: {str(e)}")
+            # En lugar de colgarse para siempre, guardamos embeddings vacíos o saltamos el lote
+            # para que el PDF termine de procesarse
+            continue
+
     print(f"     ↳ {len(embeddings)} embeddings generados (dim=1024)")
 
     chunk_metadata = [{"title": _extract_chunk_title(a), "page_start": 0, "page_end": total_pages} for a in articles]

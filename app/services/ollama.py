@@ -36,5 +36,24 @@ class OllamaService:
             resp.raise_for_status()
             return resp.json()["message"]["content"]
 
+    async def chat_with_images(self, images: list[str], prompt: str, model: str | None = None) -> str:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/api/generate",
+                json={
+                    "model": model or self.chat_model,
+                    "prompt": prompt,
+                    "images": images,
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1,
+                        "num_ctx": 32768,
+                    },
+                    "keep_alive": -1,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()["response"]
+
 
 ollama_service = OllamaService()
