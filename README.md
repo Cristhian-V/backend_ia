@@ -9,7 +9,7 @@ Backend principal de F.A.R.O. encargado del RAG (Retrieval-Augmented Generation)
 - **FastAPI** + **Uvicorn** (async)
 - **SQLAlchemy 2.0** + **asyncpg** (PostgreSQL)
 - **FAISS** (`faiss-cpu`) — almacenamiento vectorial (IndexFlatIP)
-- **Ollama** — embeddings (`bge-m3:latest`) + chat (`gemma4:26b-32k`)
+- **Ollama** — embeddings (`bge-m3:latest`) + chat (`gemma4:e4b-32k`)
 - **pypdf** / **python-docx** — parsing de documentos
 - **JWT** (python-jose) — autenticación compartida con backend_node
 
@@ -17,7 +17,7 @@ Backend principal de F.A.R.O. encargado del RAG (Retrieval-Augmented Generation)
 
 - Python 3.13+
 - PostgreSQL 16+ (puerto 5432 dev / 5433 prod)
-- Ollama con modelos `bge-m3:latest` y `gemma4:26b-32k` instalados
+- Ollama con modelos `bge-m3:latest` y `gemma4:e4b-32k` instalados
 
 ## Instalación (dev)
 
@@ -35,7 +35,7 @@ Crear `.env` en `backend/`:
 ```env
 OLLAMA_BASE_URL=http://192.168.1.10:11434
 EMBED_MODEL=bge-m3:latest
-CHAT_MODEL=gemma4:26b-32k
+CHAT_MODEL=gemma4:e4b-32k
 SECRET_KEY=change-me-to-a-random-secret-key
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 DATABASE_URL=postgresql+asyncpg://cumbre:cumbre123@localhost:5432/cumbre_ia_test

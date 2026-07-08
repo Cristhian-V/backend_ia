@@ -9,10 +9,35 @@ from app.services.ollama import ollama_service
 PAGES_PER_CHUNK = 1
 DPI = 150
 
-EXTRACTION_PROMPT = """Extrae TODO el texto de las imagenes siguientes en orden de lectura.
-Ignora completamente: sellos, firmas, pies de pagina, numeros de pagina y encabezados de pagina.
-Mantén la estructura del documento (titulos, parrafos, listas, tablas).
-Devuelve SOLO el texto extraido, sin comentarios adicionales."""
+EXTRACTION_PROMPT = """Actúa como un ingeniero de datos experto en arquitecturas RAG (Retrieval-Augmented Generation) y extracción de información. Tu tarea es analizar la imagen adjunta y extraer todo su contenido en formato texto, estructurándolo de la forma más óptima para ser indexado en una base de datos vectorial.
+
+Sigue estrictamente estas directrices de formato y extracción:
+
+1. Estructura Jerárquica y Semántica:
+   - Utiliza Markdown puro.
+   - Usa encabezados (`#`, `##`, `###`) para reflejar fielmente la jerarquía original del documento. El sistema RAG utilizará estos encabezados para mantener el contexto durante el 'chunking'.
+
+2. Extracción Exacta de Texto:
+   - Transcribe el texto de forma fiel y completa.
+   - No resumas, no parafrasees y no omitas información.
+   - Corrige silenciosamente los errores obvios de escaneo (caracteres basura generados por el OCR), pero mantén la terminología técnica o legal exacta.
+
+3. Procesamiento de Tablas (Regla Crítica):
+   - Tablas Simples: Si la tabla es plana y sencilla, conviértela en una tabla estándar de Markdown (utilizando `|` y `-`).
+   - Tablas Complejas (Anexos, instructivos con celdas combinadas): Si la tabla es compleja, usar Markdown tradicional romperá el contexto al fragmentarse (chunking). En su lugar, transforma la tabla en una estructura de lista semántica de clave-valor por cada fila o ítem. Utiliza este formato:
+     **[Título de la Tabla o Sección]**
+     * Ítem/Fila 1:
+       - [Nombre de Columna 1]: [Valor extraído]
+       - [Nombre de Columna 2]: [Valor extraído]
+       - [Nombre de Columna 3]: [Valor extraído]
+
+4. Listas y Enumeraciones:
+   - Mantén estrictamente la numeración original (letras o números) o utiliza viñetas estándar de Markdown (`*` o `-`) para facilitar la separación de párrafos.
+
+5. Elementos No Textuales Relevantes:
+   - Si la imagen contiene sellos, firmas, marcas de agua o diagramas que aportan validez o contexto (ej. "Sello de la Aduana Nacional", "Firma de la Máxima Autoridad"), descríbelos brevemente entre corchetes. Ejemplo: `[Elemento visual: Firma y sello del Gerente Nacional de Normas]`.
+
+No incluyas saludos, introducciones ni conclusiones en tu respuesta. Devuelve única y exclusivamente el texto procesado en formato Markdown, listo para ser ingerido por el pipeline de datos."""
 
 
 async def extract_pdf_to_word(pdf_bytes: bytes, filename: str, ocr_model: str, on_progress=None) -> bytes:
@@ -59,7 +84,7 @@ async def extract_pdf_to_word(pdf_bytes: bytes, filename: str, ocr_model: str, o
         print(f"     Preview: {text_preview}...")
 
         if on_progress:
-            on_progress(chunk_idx + 1, total_chunks, f"Chunk {chunk_idx + 1}/{total_chunks} procesado")
+            await on_progress(chunk_idx + 1, total_chunks, f"Chunk {chunk_idx + 1}/{total_chunks} procesado")
 
     doc.close()
     print(f"\n  📝 Generando documento Word...")

@@ -37,7 +37,7 @@ class OllamaService:
             return resp.json()["message"]["content"]
 
     async def chat_with_images(self, images: list[str], prompt: str, model: str | None = None) -> str:
-        async with httpx.AsyncClient(timeout=600.0) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
                 f"{self.base_url}/api/generate",
                 json={
@@ -46,8 +46,9 @@ class OllamaService:
                     "images": images,
                     "stream": False,
                     "options": {
-                        "temperature": 0.1,
                         "num_ctx": 32768,
+                        "temperature": 0,
+                        "num_predict": 32768,
                     },
                     "keep_alive": -1,
                 },

@@ -11,3 +11,10 @@ app/logs/
 dist/
 build/
 package-lock.json
+
+# Test scripts de desarrollo (no produccion)
+test_*.py
+test_*.docx
+
+# Configs de prueba OCR
+config_ocr_*.txt

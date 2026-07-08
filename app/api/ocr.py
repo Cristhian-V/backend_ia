@@ -43,8 +43,7 @@ async def extract_pdf(
     try:
         await progress_tracker.update(task_id, "processing", 0, 1, "Procesando PDF...")
 
-        ocr_model = "gemma4:26b-32k"
-        docx_bytes = await extract_pdf_to_word(pdf_bytes, file.filename, ocr_model, on_progress=on_progress)
+        docx_bytes = await extract_pdf_to_word(pdf_bytes, file.filename, settings.ocr_model, on_progress=on_progress)
 
         await progress_tracker.set_done(task_id, chunks=1)
 
