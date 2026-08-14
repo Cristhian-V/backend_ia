@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
             result = await conn.execute(text("SELECT COUNT(*) FROM auth.users WHERE is_admin = TRUE"))
             count = result.scalar()
             if count == 0:
-                email = os.getenv("ADMIN_EMAIL", "admin@faro.com")
+                email = os.getenv("ADMIN_EMAIL", "admin@hermes.com")
                 password = os.getenv("ADMIN_PASSWORD", "admin123")
                 hashed = hash_password(password)
                 await conn.execute(
@@ -90,7 +90,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="F.A.R.O.",
+    title="Hermes",
     version="0.1.0",
     lifespan=lifespan,
 )

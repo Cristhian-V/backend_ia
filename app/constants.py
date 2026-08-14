@@ -1,4 +1,4 @@
-TOOL_KEYS = ("agente_aduanero_ia", "liquidador_ia")
+TOOL_KEYS = ("agente_aduanero_ia", "liquidador_ia", "herramientas_transbel", "fnning")
 
 ROLES = ("consultor", "gestor")
 

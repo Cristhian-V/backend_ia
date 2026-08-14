@@ -1,8 +1,8 @@
-# F.A.R.O. — Backend (Python)
+# Hermes — Backend (Python)
 
-**Framework de Asistencia, Respuesta y Operaciones**
+**Asistente de normativa aduanera**
 
-Backend principal de F.A.R.O. encargado del RAG (Retrieval-Augmented Generation), almacenamiento vectorial con FAISS, procesamiento de documentos PDF/DOCX, extracción de referencias normativas y consulta al LLM vía Ollama.
+Backend principal de Hermes encargado del RAG (Retrieval-Augmented Generation), almacenamiento vectorial con FAISS, procesamiento de documentos PDF/DOCX, extracción de referencias normativas y consulta al LLM vía Ollama.
 
 ## Stack
 
