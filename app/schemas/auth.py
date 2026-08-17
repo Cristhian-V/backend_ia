@@ -15,6 +15,12 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+    must_change_password: bool = False
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
 
 
 class ToolInfo(BaseModel):
@@ -27,6 +33,8 @@ class UserResponse(BaseModel):
     email: str
     full_name: str
     is_admin: bool = False
+    must_change_password: bool = False
+    usuario_integre: int | None = None
     tools: list[ToolInfo] = []
 
     model_config = {"from_attributes": True}

@@ -27,6 +27,12 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS auth"))
         await conn.execute(text("CREATE SCHEMA IF NOT EXISTS core"))
         await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(
+            text("ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE")
+        )
+        await conn.execute(
+            text("ALTER TABLE auth.users ADD COLUMN IF NOT EXISTS usuario_integre INTEGER")
+        )
 
     # seed admin if none exists
     try:
