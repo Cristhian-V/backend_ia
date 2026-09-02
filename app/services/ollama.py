@@ -27,8 +27,7 @@ class OllamaService:
                     "messages": messages,
                     "stream": False,
                     "options": {
-                        "temperature": 0.7,
-                        "num_ctx": 32768,
+                        "temperature": 0.3,
                     },
                     "keep_alive": -1,
                 },
@@ -46,7 +45,6 @@ class OllamaService:
                     "images": images,
                     "stream": False,
                     "options": {
-                        "num_ctx": 32768,
                         "temperature": 0,
                         "num_predict": 32768,
                     },

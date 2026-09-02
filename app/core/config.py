@@ -7,16 +7,14 @@ class Settings(BaseSettings):
     chat_model: str = "gemma4:e4b-32k"
     ocr_model: str = "gemma4:26b-32k"
 
-    secret_key: str = "change-me-to-a-random-secret-key"
-    algorithm: str = "HS256"
-    access_token_expire_minutes: int = 1440
+    jwt_public_key_file: str = "jwt-public.pem"
 
     database_url: str = "postgresql+asyncpg://cumbre:cumbre123@localhost:5432/cumbre_ia"
     chroma_persist_dir: str = "./chroma_data"
 
     top_k: int = 5
 
-    model_config = {"env_file": ".env"}
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()

@@ -1,4 +1,4 @@
-from app.core.security import hash_password, verify_password, create_access_token
+from app.core.security import hash_password, verify_password
 
 
 class TestSecurity:
@@ -16,8 +16,3 @@ class TestSecurity:
         assert hash1 != hash2
         assert verify_password(password, hash1)
         assert verify_password(password, hash2)
-
-    def test_create_token(self):
-        token = create_access_token({"sub": "42"})
-        assert isinstance(token, str)
-        assert len(token) > 20

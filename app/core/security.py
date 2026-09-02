@@ -1,6 +1,3 @@
-from datetime import datetime, timedelta, timezone
-from typing import Optional
-
 import bcrypt
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
@@ -14,6 +11,18 @@ from app.models.user import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
+JWT_ALGORITHMS = ["RS256"]
+
+_public_key: str | None = None
+
+
+def _load_public_key() -> str:
+    global _public_key
+    if _public_key is None:
+        with open(settings.jwt_public_key_file, "r", encoding="utf-8") as f:
+            _public_key = f.read()
+    return _public_key
+
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -21,13 +30,6 @@ def hash_password(password: str) -> str:
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
-
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
 async def get_current_user(
@@ -40,7 +42,7 @@ async def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        payload = jwt.decode(token, _load_public_key(), algorithms=JWT_ALGORITHMS)
         user_id_str = payload.get("sub")
         if user_id_str is None:
             raise credentials_exception
